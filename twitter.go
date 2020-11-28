@@ -5,16 +5,14 @@ import (
 	"fmt"
 	"log"
 	"os"
-    "bytes"
     "errors"
     "io/ioutil"
 	"github.com/dghubble/oauth1"
 	"net/http"
+    "net/url"
     "encoding/base64"
     "crypto/sha256"
     "crypto/hmac"
-	//	"os/signal"
-	//	"syscall"
 )
 
 type Credentials struct {
@@ -31,15 +29,17 @@ type Webhook struct {
     CreatedAt string
 }
 
-type CRCReponse struct {
-    ResponseToken string `json:"response_token"`
-}
-
+/* GLOBAL VARIABLES */
 var USERS_TO_TRACK [1]string = [1]string{"1331444879893942272"}
 var ENV_NAME string = "AccountActivity"
-var WEBHOOK_URL string = "http://alamo.ocf.berkeley.edu/webhook/twitter"
+var WEBHOOK_URL string = "https://alamo.ocf.berkeley.edu/webhook/twitter"
 
-var TwitterApi string = "https://api.twitter.com/1.1/"
+var TwitterApi url.URL = url.URL {
+    Scheme: "https",
+    Host: "api.twitter.com",
+    Path: "/1.1",
+}
+/* --------------- */
 
 func generateResponseToken(token []byte) string {
     mac := hmac.New(sha256.New, []byte(os.Getenv("CONSUMER_SECRET")))
@@ -58,9 +58,9 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
         }
 
         responseToken := generateResponseToken([]byte(crcToken[0]))
-        resp := CRCReponse{
-            ResponseToken: "sha256=" + responseToken,
-        }
+        resp := struct {
+            ResponseToken string `json:"response_token"`
+        }{ResponseToken: "sha256=" + responseToken}
 
         w.Header().Set("Content-Type", "application/json")
         json.NewEncoder(w).Encode(resp)
@@ -86,14 +86,18 @@ func registerWebhook() {
 		log.Println(err)
 	}
 
-    postURL := TwitterApi + "account_activity/all/" + ENV_NAME +
-        "/webhooks.json?url=https%3A%2F%2Falamo.ocf.berkeley.edu%2Fwebhook%2Ftwitter"
-    postBodyJson, _ := json.Marshal(map[string]string{
-        "url": WEBHOOK_URL,
-    })
-    postBody := bytes.NewBuffer(postBodyJson)
+    postURL := TwitterApi
+    postURL.Path = postURL.Path + "/" +
+        url.PathEscape("account_activity") + "/" +
+        url.PathEscape("all") + "/" +
+        url.PathEscape(ENV_NAME) + "/" +
+        url.PathEscape("webhooks.json")
 
-    resp, err := client.Post(postURL, "application/json", postBody)
+    query := url.Values{}
+    query.Set("url", WEBHOOK_URL)
+    postURL.RawQuery = query.Encode()
+
+    resp, err := client.Post(postURL.String(), "application/json", nil)
     check(err)
 
     body, err := ioutil.ReadAll(resp.Body)
@@ -126,6 +130,10 @@ func getClient(creds *Credentials) (*http.Client, error) {
 }
 
 func VerifyCredentials(client *http.Client) {
-	_, err := client.Get(TwitterApi + "account/verify_credentials.json")
+    verifyURL := TwitterApi
+    verifyURL.Path = verifyURL.Path + "/" +
+        url.PathEscape("account") + "/" +
+        url.PathEscape("verify_credentials.json")
+	_, err := client.Get(verifyURL.String())
 	check(err)
 }
