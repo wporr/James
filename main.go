@@ -3,31 +3,32 @@ package main
 import (
     "fmt"
     "log"
+    "syscall"
+    "os"
+    "os/signal"
     "net/http"
-    "encoding/json"
 )
 
 func main() {
+	fmt.Println("James v0.01")
     routes()
     fmt.Println("Starting server...")
-    log.Fatal(http.ListenAndServe(":8080", nil))
+
+	// Begin handling messages from the stream
+	go func(){log.Fatal(http.ListenAndServe(":8080", nil))}()
+
+    fmt.Println("Registering Webhook")
+    registerWebhook()
+	// Wait for SIGING and SIGTERM (ctrl-c)
+	ch := make(chan os.Signal)
+	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+	log.Println(<-ch)
+
+	fmt.Println("Stopping server...")
 }
 
 func routes() {
-    http.HandleFunc("/webhook/twitter", func(w http.ResponseWriter, r *http.Request) {
-        crcToken, ok := r.URL.Query()["crc_token"]
-        if !ok {
-            fmt.Println("Couldnt get crc_token")
-        }
-
-        responseToken := generateResponseToken([]byte(crcToken[0]))
-        resp, err := json.Marshal(map[string]string{
-            "response_token": responseToken,
-        })
-        check(err)
-
-        fmt.Fprintln(w, resp)
-    })
+    http.HandleFunc("/webhook/twitter", webhookHandler)
 }
 
 // For checking errors more easily

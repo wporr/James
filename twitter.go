@@ -1,10 +1,13 @@
 package main
 
 import (
-	//	"encoding/json"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+    "bytes"
+    "errors"
+    "io/ioutil"
 	"github.com/dghubble/oauth1"
 	"net/http"
     "encoding/base64"
@@ -21,7 +24,20 @@ type Credentials struct {
 	AccessTokenSecret string
 }
 
+type Webhook struct {
+    ID        string
+    URL       string
+    Valid     bool
+    CreatedAt string
+}
+
+type CRCReponse struct {
+    ResponseToken string `json:"response_token"`
+}
+
 var USERS_TO_TRACK [1]string = [1]string{"1331444879893942272"}
+var ENV_NAME string = "AccountActivity"
+var WEBHOOK_URL string = "http://alamo.ocf.berkeley.edu/webhook/twitter"
 
 var TwitterApi string = "https://api.twitter.com/1.1/"
 
@@ -33,10 +49,29 @@ func generateResponseToken(token []byte) string {
     return base64.StdEncoding.EncodeToString(tokenBytes)
 }
 
+func webhookHandler(w http.ResponseWriter, r *http.Request) {
+    switch method := r.Method; method {
+    case "GET":
+        crcToken, ok := r.URL.Query()["crc_token"]
+        if !ok {
+            panic(errors.New("Couldnt get crc_token"))
+        }
 
-func startListener() {
-	fmt.Println("James v0.01")
+        responseToken := generateResponseToken([]byte(crcToken[0]))
+        resp := CRCReponse{
+            ResponseToken: "sha256=" + responseToken,
+        }
 
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(resp)
+    case "POST":
+        fmt.Println("Event received\n")
+        fmt.Println(r)
+    }
+}
+
+
+func registerWebhook() {
 	// Get credentials for twitter create a client
 	creds := Credentials{
 		ConsumerKey:       os.Getenv("CONSUMER_KEY"),
@@ -45,23 +80,31 @@ func startListener() {
 		AccessTokenSecret: os.Getenv("ACCESS_TOKEN_SECRET"),
 	}
 
-	_, err := getClient(&creds)
+	client, err := getClient(&creds)
 	if err != nil {
 		log.Println("Error getting Twitter Client")
 		log.Println(err)
 	}
 
-	// Should have a similar setup for handling streams
-	//	// Begin handling messages from the stream
-	//	go demux.HandleChan(stream.Messages)
-	//
-	//	// Wait for SIGING and SIGTERM (ctrl-c)
-	//	ch := make(chan os.Signal)
-	//	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
-	//	log.Println(<-ch)
-	//
-	//	fmt.Println("Stopping stream...")
-	//	stream.Stop()
+    postURL := TwitterApi + "account_activity/all/" + ENV_NAME +
+        "/webhooks.json?url=https%3A%2F%2Falamo.ocf.berkeley.edu%2Fwebhook%2Ftwitter"
+    postBodyJson, _ := json.Marshal(map[string]string{
+        "url": WEBHOOK_URL,
+    })
+    postBody := bytes.NewBuffer(postBodyJson)
+
+    resp, err := client.Post(postURL, "application/json", postBody)
+    check(err)
+
+    body, err := ioutil.ReadAll(resp.Body)
+    check(err)
+    fmt.Println(string(body))
+
+    var w = new(Webhook)
+    err = json.Unmarshal([]byte(body), &w)
+    check(err)
+
+    fmt.Println(w)
 }
 
 // getClient is a helper function that will allow
@@ -83,7 +126,6 @@ func getClient(creds *Credentials) (*http.Client, error) {
 }
 
 func VerifyCredentials(client *http.Client) {
-	resp, err := client.Get(TwitterApi + "account/verify_credentials.json")
+	_, err := client.Get(TwitterApi + "account/verify_credentials.json")
 	check(err)
-	fmt.Println(resp)
 }
