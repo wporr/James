@@ -96,7 +96,7 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	case "POST":
-		fmt.Println("Event received\n")
+		fmt.Println("Event received")
 		defer r.Body.Close()
 		body, _ := ioutil.ReadAll(r.Body)
 
@@ -110,7 +110,6 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			fmt.Printf("not mention")
 		}
-
 	}
 }
 
