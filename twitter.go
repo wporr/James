@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/dghubble/oauth1"
 	"io/ioutil"
 	"log"
@@ -66,6 +65,12 @@ var WEBHOOK_URL string = "https://alamo.ocf.berkeley.edu/webhook/twitter"
 var JAMES User = User{
 	ID: 1305226572564062208,
 }
+var LIAM User = User{
+	ID: 2469247423,
+}
+var LIAM_TEST_ACCT User = User{
+	ID: 1331444879893942272,
+}
 
 var TwitterApi url.URL = url.URL{
 	Scheme: "https",
@@ -78,6 +83,12 @@ var TwitterApi url.URL = url.URL{
 // So to make sure we stay under the limit, we went a bit
 // lower than the tweet char max, from 280/4 to 220/4, i.e. 55
 var MAX_TWEET_TOKENS int = 55
+
+// List of users who are able to talk to James
+var WHITELISTED_USERS []User = []User{
+	LIAM,
+	LIAM_TEST_ACCT,
+}
 
 /* --------------- */
 
@@ -106,8 +117,7 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	case "POST":
-		fmt.Println("Event received")
-		defer r.Body.Close()
+		log.Println("Event received")
 		body, _ := ioutil.ReadAll(r.Body)
 
 		// This is not all thats returned in the body, but
@@ -115,12 +125,21 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 		resp := Event{}
 		check(json.Unmarshal([]byte(body), &resp))
 
-		if isMention(&resp) {
+		if isMention(&resp) && isWhitelisted(resp.TweetCreateEvents[0].User) {
 			check(postReply(resp.TweetCreateEvents[0]))
 		} else {
-			fmt.Printf("not mention")
+			log.Printf("Event is not a mention or not whitelisted")
 		}
 	}
+}
+
+func isWhitelisted(u User) bool {
+	for _, wlu := range WHITELISTED_USERS {
+		if u == wlu {
+			return true
+		}
+	}
+	return false
 }
 
 func postReply(t Tweet) error {
@@ -166,9 +185,7 @@ func postReply(t Tweet) error {
 	query.Set("in_reply_to_status_id", strconv.FormatInt(t.ID, 10))
 	statusUpdateEndpoint.RawQuery = query.Encode()
 
-	apiResp, err := client.Post(statusUpdateEndpoint.String(), "application/json", nil)
-
-	body, err := ioutil.ReadAll(apiResp.Body)
+	_, err = client.Post(statusUpdateEndpoint.String(), "application/json", nil)
 	return err
 }
 
@@ -218,7 +235,6 @@ func registerWebhook() {
 	req, _ := http.NewRequest("GET", webhkEndpt.String(), nil)
 	req.Header.Set("authorization", "Bearer "+os.Getenv("BEARER_TOKEN"))
 	resp, err := appClient.Do(req)
-	defer resp.Body.Close()
 	check(err)
 	body, _ := ioutil.ReadAll(resp.Body)
 	var w = new(Webhook)
@@ -234,7 +250,6 @@ func registerWebhook() {
 		check(err)
 
 		body, _ = ioutil.ReadAll(resp.Body)
-		defer resp.Body.Close()
 		check(json.Unmarshal([]byte(body), &w))
 	} else {
 		log.Println("Registered webhook found. Reusing")
@@ -275,7 +290,6 @@ func subscribe(client *http.Client, envName string) error {
 	check(err)
 
 	if resp.StatusCode != 204 {
-		defer resp.Body.Close()
 		response, _ := ioutil.ReadAll(resp.Body)
 		return errors.New("Could not subscribe environment " +
 			envName + "\nResponse: " + string(response))
