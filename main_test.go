@@ -17,6 +17,7 @@ func TestBasicCompletion(t *testing.T) {
 		Model:        Ada,
 		Template:     *StandardTmpl,
 		Temperature:  0.7,
+		Tokens:       55,
 	}
 
 	buf := make(chan CompletionRequest, 1)

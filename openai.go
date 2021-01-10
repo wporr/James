@@ -13,12 +13,6 @@ import (
 	"text/template"
 )
 
-// Tweets are 280 chars max. GPT-3 output is measured
-// in tokens, which are roughly 4 english chars in length.
-// So to make sure we stay under the limit, we went a bit
-// lower than the tweet char max, from 280/4 to 220/4, i.e. 55
-var MAX_TWEET_TOKENS int = 55
-
 // Number of times we'll retry generating a prompt thats unsafe
 // before giving up
 var MAX_COMPLETION_RETRIES int = 5
@@ -32,6 +26,7 @@ type CompletionRequest struct {
 	Model        ModelEnum
 	Template     template.Template
 	Temperature  float32
+	Tokens       int
 }
 
 type CompletionReponse struct {
@@ -93,7 +88,7 @@ func runCompletions(buffer chan CompletionRequest) {
 			check(request.Template.Execute(prompt, request))
 
 			req := gogpt.CompletionRequest{
-				MaxTokens:   MAX_TWEET_TOKENS,
+				MaxTokens:   request.Tokens,
 				Prompt:      prompt.String(),
 				Temperature: request.Temperature,
 			}

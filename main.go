@@ -20,6 +20,7 @@ func main() {
 
 	// Begin handling messages from the stream
 	go func() { log.Fatal(http.ListenAndServe(":8080", nil)) }()
+	go runCompletions(JamesBuffer)
 
 	fmt.Println("Registering Webhook")
 	registerWebhook()

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 )
 
 type Credentials struct {
@@ -47,6 +48,7 @@ type Tweet struct {
 	User            User    `json:"user"`
 	Entities        Entity  `json:"entities"`
 	RetweetedStatus Retweet `json:"retweeted_status"`
+	ID              int64   `json:"id"`
 }
 
 // Retweets are actually the same as tweets, but
@@ -58,6 +60,7 @@ type Retweet struct {
 }
 
 /* GLOBAL VARIABLES */
+
 var ENV_NAME string = "AccountActivity"
 var WEBHOOK_URL string = "https://alamo.ocf.berkeley.edu/webhook/twitter"
 var JAMES User = User{
@@ -69,6 +72,12 @@ var TwitterApi url.URL = url.URL{
 	Host:   "api.twitter.com",
 	Path:   "/1.1",
 }
+
+// Tweets are 280 chars max. GPT-3 output is measured
+// in tokens, which are roughly 4 english chars in length.
+// So to make sure we stay under the limit, we went a bit
+// lower than the tweet char max, from 280/4 to 220/4, i.e. 55
+var MAX_TWEET_TOKENS int = 55
 
 /* --------------- */
 
@@ -83,6 +92,7 @@ func generateResponseToken(token []byte) string {
 func webhookHandler(w http.ResponseWriter, r *http.Request) {
 	switch method := r.Method; method {
 	case "GET":
+		log.Printf("webhook question response reqeust received")
 		crcToken, ok := r.URL.Query()["crc_token"]
 		if !ok {
 			panic(errors.New("Couldnt get crc_token"))
@@ -106,11 +116,60 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 		check(json.Unmarshal([]byte(body), &resp))
 
 		if isMention(&resp) {
-			fmt.Printf("is mention")
+			check(postReply(resp.TweetCreateEvents[0]))
 		} else {
 			fmt.Printf("not mention")
 		}
 	}
+}
+
+func postReply(t Tweet) error {
+	creds := Credentials{
+		ConsumerKey:       os.Getenv("CONSUMER_KEY"),
+		ConsumerSecret:    os.Getenv("CONSUMER_SECRET"),
+		AccessToken:       os.Getenv("ACCESS_TOKEN"),
+		AccessTokenSecret: os.Getenv("ACCESS_TOKEN_SECRET"),
+	}
+
+	client, err := getClient(&creds)
+
+	statusUpdateEndpoint := TwitterApi
+	statusUpdateEndpoint.Path = statusUpdateEndpoint.Path + "/" +
+		url.PathEscape("statuses") + "/" +
+		url.PathEscape("update.json")
+
+	// Create the request for a text completion from GPT-3
+	// TODO: Determine template by reading the status of the
+	// mention and matching it to some template
+	responseChan := make(chan CompletionReponse, 1)
+	req := CompletionRequest{
+		Prompt:       t.Text,
+		ResponseChan: responseChan,
+		Model:        Davinci,
+		Template:     *StandardTmpl,
+		Temperature:  0.9,
+		Tokens:       MAX_TWEET_TOKENS,
+	}
+
+	JamesBuffer <- req
+
+	// Wait for the completion and use it to create the tweet reply
+	resp := <-responseChan
+	check(resp.Err)
+
+	// Tweets will only be registered as a response if the
+	// "in_reply_to_status_id" parameter is set to the tweet that
+	// is being responded to AND if the reponse itself contains a
+	// mention of the user that created the original tweet
+	query := url.Values{}
+	query.Set("status", resp.Response)
+	query.Set("in_reply_to_status_id", strconv.FormatInt(t.ID, 10))
+	statusUpdateEndpoint.RawQuery = query.Encode()
+
+	apiResp, err := client.Post(statusUpdateEndpoint.String(), "application/json", nil)
+
+	body, err := ioutil.ReadAll(apiResp.Body)
+	return err
 }
 
 // To differentiate a mention from other tweets is
@@ -178,12 +237,16 @@ func registerWebhook() {
 		defer resp.Body.Close()
 		check(json.Unmarshal([]byte(body), &w))
 	} else {
+		log.Println("Registered webhook found. Reusing")
 		var getResp = new([]Webhook)
 		err = json.Unmarshal([]byte(body), &getResp)
 		check(err)
 		*w = (*getResp)[0]
 	}
 
+	// Subscribe to account activity for the requesting user in the
+	// environment ENV_NAME. Max of 15 users per application in free tier.
+	// Events are sent to the webhooks registered by the user `client`
 	check(subscribe(client, ENV_NAME))
 	//	fmt.Println("deleting webhook")
 	//	check(deleteWebhook(w.ID, client))
