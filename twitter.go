@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Credentials struct {
@@ -42,12 +43,13 @@ type Entity struct {
 }
 
 type Tweet struct {
-	CreatedAt       string  `json:"created_at"`
-	Text            string  `json:"text"`
-	User            User    `json:"user"`
-	Entities        Entity  `json:"entities"`
-	RetweetedStatus Retweet `json:"retweeted_status"`
-	ID              int64   `json:"id"`
+	CreatedAt         string  `json:"created_at"`
+	Text              string  `json:"text"`
+	User              User    `json:"user"`
+	Entities          Entity  `json:"entities"`
+	RetweetedStatus   Retweet `json:"retweeted_status"`
+	ID                int64   `json:"id"`
+	InReplyToStatusID int64   `json:"in_reply_to_status_id"`
 }
 
 // Retweets are actually the same as tweets, but
@@ -143,6 +145,8 @@ func isWhitelisted(u User) bool {
 }
 
 func postReply(t Tweet) error {
+	// TODO: maybe creating a client for every request we get is not
+	// a great idea. Might get rate limited
 	creds := Credentials{
 		ConsumerKey:       os.Getenv("CONSUMER_KEY"),
 		ConsumerSecret:    os.Getenv("CONSUMER_SECRET"),
@@ -152,6 +156,8 @@ func postReply(t Tweet) error {
 
 	client, err := getClient(&creds)
 
+	lines := unrollThread(t, client)
+
 	statusUpdateEndpoint := TwitterApi
 	statusUpdateEndpoint.Path = statusUpdateEndpoint.Path + "/" +
 		url.PathEscape("statuses") + "/" +
@@ -160,14 +166,15 @@ func postReply(t Tweet) error {
 	// Create the request for a text completion from GPT-3
 	// TODO: Determine template by reading the status of the
 	// mention and matching it to some template
-	responseChan := make(chan CompletionReponse, 1)
+	responseChan := make(chan CompletionResponse, 1)
 	req := CompletionRequest{
-		Prompt:       t.Text,
+		Lines:        lines,
 		ResponseChan: responseChan,
 		Model:        Davinci,
-		Template:     *StandardTmpl,
-		Temperature:  0.9,
-		Tokens:       MAX_TWEET_TOKENS,
+		//	Model:       Ada,
+		Template:    *StandardTmpl,
+		Temperature: 0.9,
+		Tokens:      MAX_TWEET_TOKENS,
 	}
 
 	JamesBuffer <- req
@@ -187,6 +194,63 @@ func postReply(t Tweet) error {
 
 	_, err = client.Post(statusUpdateEndpoint.String(), "application/json", nil)
 	return err
+}
+
+// Often times we want to have a conversation in the
+// comments or include multiple tweets. This function
+// will detect if there are multiple tweets preceeding
+// the one that triggered the event and include them for
+// context.
+func unrollThread(t Tweet, client *http.Client) []Line {
+	// Matches speaker and text for the template
+	lines := []Line{
+		Line{
+			IsJames: t.User == JAMES,
+			// Newlines can mess up GPT-3
+			Text: strings.ReplaceAll(t.Text, "\n", " "),
+		},
+	}
+	curr_tweet := t
+
+	log.Printf("reply stat: %v", curr_tweet.InReplyToStatusID)
+
+	for curr_tweet.InReplyToStatusID != 0 {
+		replyId := curr_tweet.InReplyToStatusID
+		getTweetEndpoint := TwitterApi
+		getTweetEndpoint.Path = getTweetEndpoint.Path + "/" +
+			url.PathEscape("statuses") + "/" +
+			url.PathEscape("show.json")
+
+		query := url.Values{}
+		query.Set("id", strconv.FormatInt(replyId, 10))
+		getTweetEndpoint.RawQuery = query.Encode()
+
+		resp, err := client.Get(getTweetEndpoint.String())
+		check(err)
+
+		body, err := ioutil.ReadAll(resp.Body)
+		check(err)
+
+		// Need to nullify the current value because if
+		// the request does not fill out a particular parameter,
+		// it wont get overwritten.
+		curr_tweet = Tweet{}
+		json.Unmarshal(body, &curr_tweet)
+		log.Println(curr_tweet)
+
+		line := Line{
+			IsJames: curr_tweet.User == JAMES,
+			Text:    strings.ReplaceAll(curr_tweet.Text, "\n", " "),
+		}
+
+		// Order matters. Make sure that as we go up to
+		// the top of the thread, new lines are added to
+		// the beginning of the list so they appear first
+		// in the prompt
+		lines = append([]Line{line}, lines...)
+		log.Println(curr_tweet.InReplyToStatusID == 0)
+	}
+	return lines
 }
 
 // To differentiate a mention from other tweets is
@@ -263,8 +327,8 @@ func registerWebhook() {
 	// environment ENV_NAME. Max of 15 users per application in free tier.
 	// Events are sent to the webhooks registered by the user `client`
 	check(subscribe(client, ENV_NAME))
-	//	fmt.Println("deleting webhook")
-	//	check(deleteWebhook(w.ID, client))
+	//log.Println("deleting webhook")
+	//check(deleteWebhook(w.ID, client))
 
 }
 

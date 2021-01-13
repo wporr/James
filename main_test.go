@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	gogpt "github.com/sashabaranov/go-gpt3"
 	"os"
 	"testing"
@@ -10,9 +9,9 @@ import (
 )
 
 func TestBasicCompletion(t *testing.T) {
-	var testResponseChan = make(chan CompletionReponse, 1)
+	var testResponseChan = make(chan CompletionResponse, 1)
 	req := CompletionRequest{
-		Prompt:       "tell me a joke",
+		Lines:        []Line{Line{false, "tell me a joke"}},
 		ResponseChan: testResponseChan,
 		Model:        Ada,
 		Template:     *StandardTmpl,
@@ -44,11 +43,11 @@ func TestSensitivity(t *testing.T) {
 }
 
 func TestSensitivityRetries(t *testing.T) {
-	var testResponseChan = make(chan CompletionReponse, 1)
-	dummyTempl, _ := template.New("dummy").Parse(`{{.Prompt}}`)
+	var testResponseChan = make(chan CompletionResponse, 1)
+	dummyTempl, _ := template.New("dummy").Parse(`{{range .}}{{.Text}}{{end}}`)
 
 	req := CompletionRequest{
-		Prompt:       os.Getenv("UNSAFE_PROMPT"),
+		Lines:        []Line{Line{false, os.Getenv("UNSAFE_PROMPT")}},
 		ResponseChan: testResponseChan,
 		Model:        Ada,
 		Template:     *dummyTempl,
@@ -67,7 +66,7 @@ func TestSensitivityRetries(t *testing.T) {
 	}
 }
 
-func testFilterDoubleResp(t *testing.T) {
+func TestFilterDoubleResp(t *testing.T) {
 	txtJames := "James: random response "
 	txtLiam := "\nLiam: remove me"
 
@@ -75,5 +74,31 @@ func testFilterDoubleResp(t *testing.T) {
 
 	if filtered != txtJames {
 		t.Errorf("Text did not get filtered properly. Filtered text: %v", filtered)
+	}
+}
+
+func TestTemplateThreadFormatting(t *testing.T) {
+	lines := []Line{
+		Line{
+			IsJames: false,
+			Text:    "how do you do?",
+		},
+		Line{
+			IsJames: true,
+			Text:    "I'm doing well how about you?",
+		},
+		Line{
+			IsJames: false,
+			Text:    "Just fine thank you",
+		},
+	}
+
+	tmpl, err := template.New("standard").Parse(`{{range .}}{{if .IsJames}}{{"James:@LiamTestAccoun3 "}}{{println .Text "\n"}}{{else}}{{"Liam:@JAMES__9000 "}}{{println .Text " \n"}}{{end}}{{end}}James:`)
+	check(err)
+
+	err = tmpl.Execute(os.Stdout, lines)
+
+	if err != nil {
+		t.Errorf("Did not format correctly, err: %v", err)
 	}
 }

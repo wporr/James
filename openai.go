@@ -9,7 +9,6 @@ import (
 	"os"
 	"regexp"
 	"strconv"
-	"strings"
 	"text/template"
 )
 
@@ -21,15 +20,15 @@ var MAX_COMPLETION_RETRIES int = 5
 var DEFAULT_RESPONSE string = "*Yaaaawn*... eh, I dont really feel like it"
 
 type CompletionRequest struct {
-	Prompt       string
-	ResponseChan chan CompletionReponse
+	Lines        []Line
+	ResponseChan chan CompletionResponse
 	Model        ModelEnum
 	Template     template.Template
 	Temperature  float32
 	Tokens       int
 }
 
-type CompletionReponse struct {
+type CompletionResponse struct {
 	Response string
 	Err      error
 }
@@ -75,17 +74,14 @@ func runCompletions(buffer chan CompletionRequest) {
 			return
 		} else if !request.Model.IsValid() {
 			// Make sure we have a valid model requested
-			request.ResponseChan <- CompletionReponse{
+			request.ResponseChan <- CompletionResponse{
 				Response: "",
 				Err: errors.New("Requested invalid model: " +
 					request.Model.String()),
 			}
 		} else {
-			// Newlines can trip up GPT-3
-			request.Prompt = strings.ReplaceAll(request.Prompt, "\n", " ")
-
 			prompt := new(bytes.Buffer)
-			check(request.Template.Execute(prompt, request))
+			check(request.Template.Execute(prompt, request.Lines))
 
 			req := gogpt.CompletionRequest{
 				MaxTokens:   request.Tokens,
@@ -122,7 +118,7 @@ func runCompletions(buffer chan CompletionRequest) {
 
 			filteredText := filterResponse(respText)
 
-			request.ResponseChan <- CompletionReponse{
+			request.ResponseChan <- CompletionResponse{
 				Response: filteredText,
 				Err:      nil,
 			}
