@@ -31,6 +31,7 @@ type Webhook struct {
 }
 
 type Event struct {
+	ForUserID         string  `json:"for_user_id"`
 	TweetCreateEvents []Tweet `json:"tweet_create_events"`
 }
 
@@ -48,6 +49,7 @@ type Tweet struct {
 	User              User    `json:"user"`
 	Entities          Entity  `json:"entities"`
 	RetweetedStatus   Retweet `json:"retweeted_status"`
+	QuotedStatus      Retweet `json:"quoted_status"`
 	ID                int64   `json:"id"`
 	InReplyToStatusID int64   `json:"in_reply_to_status_id"`
 }
@@ -72,6 +74,13 @@ var LIAM User = User{
 }
 var LIAM_TEST_ACCT User = User{
 	ID: 1331444879893942272,
+}
+
+// These are the users for whom we respond on every status update.
+// They need to be whitelisted and we need to subscribe to their
+// account activity in the register webhook function.
+var USERS_TRACKING = []User{
+	LIAM_TEST_ACCT,
 }
 
 var TwitterApi url.URL = url.URL{
@@ -127,12 +136,25 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 		resp := Event{}
 		check(json.Unmarshal([]byte(body), &resp))
 
-		if isMention(&resp) && isWhitelisted(resp.TweetCreateEvents[0].User) {
+		if (isNormalTweet(&resp) || isMention(&resp)) && isWhitelisted(resp.TweetCreateEvents[0].User) {
 			check(postReply(resp.TweetCreateEvents[0]))
 		} else {
 			log.Printf("Event is not a mention or not whitelisted")
 		}
 	}
+}
+
+func isNormalTweet(event *Event) bool {
+	if len(event.TweetCreateEvents) == 0 {
+		return false
+	} else if t := event.TweetCreateEvents[0]; t.User.ID != JAMES.ID &&
+		!contains(t.Entities.UserMentions, JAMES) &&
+		contains(USERS_TRACKING, t.User) &&
+		t.RetweetedStatus == (Retweet{}) &&
+		t.QuotedStatus == (Retweet{}) {
+		return true
+	}
+	return false
 }
 
 func isWhitelisted(u User) bool {
@@ -212,8 +234,6 @@ func unrollThread(t Tweet, client *http.Client) []Line {
 	}
 	curr_tweet := t
 
-	log.Printf("reply stat: %v", curr_tweet.InReplyToStatusID)
-
 	for curr_tweet.InReplyToStatusID != 0 {
 		replyId := curr_tweet.InReplyToStatusID
 		getTweetEndpoint := TwitterApi
@@ -259,11 +279,12 @@ func unrollThread(t Tweet, client *http.Client) []Line {
 // the authenticated account, and by checking the
 // mentions list in the entities key
 func isMention(event *Event) bool {
-	if len(event.TweetCreateEvents) == 0 {
+	if len(event.TweetCreateEvents) == 0 || event.ForUserID != strconv.FormatInt(JAMES.ID, 10) {
 		return false
 	} else if t := event.TweetCreateEvents[0]; t.User.ID != JAMES.ID &&
 		contains(t.Entities.UserMentions, JAMES) &&
-		t.RetweetedStatus == (Retweet{}) {
+		t.RetweetedStatus == (Retweet{}) &&
+		t.QuotedStatus == (Retweet{}) {
 		return true
 	}
 	return false
@@ -326,7 +347,21 @@ func registerWebhook() {
 	// Subscribe to account activity for the requesting user in the
 	// environment ENV_NAME. Max of 15 users per application in free tier.
 	// Events are sent to the webhooks registered by the user `client`
+
+	// This subscribes to the activity on James's account
 	check(subscribe(client, ENV_NAME))
+
+	// This subscribes to all activity on the test account.
+	// This allows us to respond to all tweets coming from this account
+	test_acct_creds := Credentials{
+		ConsumerKey:       os.Getenv("CONSUMER_KEY"),
+		ConsumerSecret:    os.Getenv("CONSUMER_SECRET"),
+		AccessToken:       os.Getenv("TEST_AUTH_TOKEN"),
+		AccessTokenSecret: os.Getenv("TEST_AUTH_SECRET"),
+	}
+	test_acct_client, err := getClient(&test_acct_creds)
+	check(err)
+	check(subscribe(test_acct_client, ENV_NAME))
 	//log.Println("deleting webhook")
 	//check(deleteWebhook(w.ID, client))
 
