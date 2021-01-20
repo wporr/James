@@ -14,3 +14,9 @@ Liam:@JAMES__9000 James, I cant decide if I should keep working on this project 
 James:@LiamTestAccoun3 Oh Mr. Porr you need to stop being so indecisive. Just pick one and you'll be all right in the end.
 
 {{range .}}{{if .IsJames}}{{"James:@LiamTestAccoun3 "}}{{println .Text "\n"}}{{else}}{{"Liam:@JAMES__9000 "}}{{println .Text " \n"}}{{end}}{{end}}James:`)
+
+var HoroscopeTmpl = "Complete the third horoscope in one sentence\n\n" +
+	"1.@liamport9 At 3:05PM today, someone is going to toss a carrot through your window\n\n" +
+	"2.@liamport9 You may want to avoid the west side of the sidewalk for a few days\n\n" +
+	"3.@liamport9 If you see a beagle walk up to you, do not pet it or pinch its ear\n\n" +
+	"4.@liamport9 "

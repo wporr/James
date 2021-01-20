@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Credentials struct {
@@ -189,12 +191,15 @@ func postReply(t Tweet) error {
 	// TODO: Determine template by reading the status of the
 	// mention and matching it to some template
 	responseChan := make(chan CompletionResponse, 1)
+	prompt := new(bytes.Buffer)
+	check(StandardTmpl.Execute(prompt, lines))
+
 	req := CompletionRequest{
-		Lines:        lines,
+		Prompt:       prompt.String(),
+		FilterRegex:  `\n[a-zA-z0-9]+:`,
 		ResponseChan: responseChan,
 		Model:        Davinci,
 		//	Model:       Ada,
-		Template:    *StandardTmpl,
 		Temperature: 0.9,
 		Tokens:      MAX_TWEET_TOKENS,
 	}
@@ -288,6 +293,67 @@ func isMention(event *Event) bool {
 		return true
 	}
 	return false
+}
+
+// This function performs the daily execution of a hororscope function
+// at the specified time
+func executeHoroscope(hour int, min int, sec int) {
+	t0 := time.Now()
+
+	// This evaluates to 8AM the following day
+	yyyy, mm, dd := t0.Date()
+	t1 := time.Date(yyyy, mm, dd+1, hour, min, sec, 0, t0.Location())
+	wait := t1.Sub(t0)
+
+	time.Sleep(wait)
+
+	dailyTimer := time.Tick(24 * time.Second)
+
+	for {
+		postHoroscope()
+		<-dailyTimer
+	}
+}
+
+func postHoroscope() {
+	// TODO: we should have a global client
+	creds := Credentials{
+		ConsumerKey:       os.Getenv("CONSUMER_KEY"),
+		ConsumerSecret:    os.Getenv("CONSUMER_SECRET"),
+		AccessToken:       os.Getenv("ACCESS_TOKEN"),
+		AccessTokenSecret: os.Getenv("ACCESS_TOKEN_SECRET"),
+	}
+
+	client, err := getClient(&creds)
+
+	statusUpdateEndpoint := TwitterApi
+	statusUpdateEndpoint.Path = statusUpdateEndpoint.Path + "/" +
+		url.PathEscape("statuses") + "/" +
+		url.PathEscape("update.json")
+
+	responseChan := make(chan CompletionResponse, 1)
+
+	req := CompletionRequest{
+		Prompt:       HoroscopeTmpl,
+		FilterRegex:  `\n`,
+		ResponseChan: responseChan,
+		Model:        DavinciInstruct,
+		Temperature:  0.9,
+		Tokens:       MAX_TWEET_TOKENS,
+	}
+
+	JamesBuffer <- req
+
+	// Wait for the completion and use it to create the tweet reply
+	resp := <-responseChan
+	check(resp.Err)
+
+	query := url.Values{}
+	query.Set("status", resp.Response)
+	statusUpdateEndpoint.RawQuery = query.Encode()
+
+	_, err = client.Post(statusUpdateEndpoint.String(), "application/json", nil)
+	check(err)
 }
 
 func registerWebhook() {

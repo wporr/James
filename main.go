@@ -24,6 +24,10 @@ func main() {
 
 	fmt.Println("Registering Webhook")
 	registerWebhook()
+
+	// Execute horoscope function once a day at 8am PST
+	go executeHoroscope(8, 0, 0)
+
 	// Wait for SIGING and SIGTERM (ctrl-c)
 	ch := make(chan os.Signal)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)

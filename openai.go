@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	gogpt "github.com/sashabaranov/go-gpt3"
@@ -9,7 +8,6 @@ import (
 	"os"
 	"regexp"
 	"strconv"
-	"text/template"
 )
 
 // Number of times we'll retry generating a prompt thats unsafe
@@ -20,10 +18,10 @@ var MAX_COMPLETION_RETRIES int = 5
 var DEFAULT_RESPONSE string = "*Yaaaawn*... eh, I dont really feel like it"
 
 type CompletionRequest struct {
-	Lines        []Line
+	Prompt       string
+	FilterRegex  string
 	ResponseChan chan CompletionResponse
 	Model        ModelEnum
-	Template     template.Template
 	Temperature  float32
 	Tokens       int
 }
@@ -43,7 +41,7 @@ func (e ModelEnum) String() string {
 }
 
 func (e ModelEnum) IsValid() bool {
-	for _, m := range []ModelEnum{Ada, Babbage, Curie, Davinci} {
+	for _, m := range []ModelEnum{Ada, Babbage, Curie, Davinci, DavinciInstruct, CurieInstruct} {
 		if m == e {
 			return true
 		}
@@ -53,12 +51,14 @@ func (e ModelEnum) IsValid() bool {
 
 // Not a great way to do enums in golang
 var (
-	es = []string{"ada", "babbage", "curie", "davinci"}
+	es = []string{"ada", "babbage", "curie", "davinci", "davinci-instruct-beta", "curie-instruct-beta"}
 
-	Ada     = ModelEnum{&es[0]}
-	Babbage = ModelEnum{&es[1]}
-	Curie   = ModelEnum{&es[2]}
-	Davinci = ModelEnum{&es[3]}
+	Ada             = ModelEnum{&es[0]}
+	Babbage         = ModelEnum{&es[1]}
+	Curie           = ModelEnum{&es[2]}
+	Davinci         = ModelEnum{&es[3]}
+	DavinciInstruct = ModelEnum{&es[4]}
+	CurieInstruct   = ModelEnum{&es[5]}
 )
 
 func runCompletions(buffer chan CompletionRequest) {
@@ -80,12 +80,9 @@ func runCompletions(buffer chan CompletionRequest) {
 					request.Model.String()),
 			}
 		} else {
-			prompt := new(bytes.Buffer)
-			check(request.Template.Execute(prompt, request.Lines))
-
 			req := gogpt.CompletionRequest{
 				MaxTokens:   request.Tokens,
-				Prompt:      prompt.String(),
+				Prompt:      request.Prompt,
 				Temperature: request.Temperature,
 			}
 
@@ -116,7 +113,7 @@ func runCompletions(buffer chan CompletionRequest) {
 				}
 			}
 
-			filteredText := filterResponse(respText)
+			filteredText := filterResponse(respText, request.FilterRegex)
 
 			request.ResponseChan <- CompletionResponse{
 				Response: filteredText,
@@ -127,11 +124,11 @@ func runCompletions(buffer chan CompletionRequest) {
 	}
 }
 
-func filterResponse(text string) string {
+func filterResponse(text string, regex string) string {
 	// Regex to match the beginning of text we want to remove
 	// If the ai tries to provide the user's response to it's response,
 	// we'll remove it
-	re := regexp.MustCompile(`\n[a-zA-z0-9]+:`)
+	re := regexp.MustCompile(regex)
 	indexes := re.FindStringIndex(text)
 
 	if indexes != nil {
